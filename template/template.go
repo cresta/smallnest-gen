@@ -2,7 +2,7 @@ package template
 
 import "embed"
 
-//go:embed *.go.tmpl
+//go:embed *.tmpl mapping.json
 var FS embed.FS
 
 func ReadTemplate(name string) ([]byte, error) {
