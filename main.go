@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"go/build"
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,14 +16,13 @@ import (
 	schema "github.com/cresta/jimsmart-schema"
 	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/droundy/goopt"
-	"github.com/gobuffalo/packd"
-	"github.com/gobuffalo/packr/v2"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	_ "github.com/lib/pq"
 	"github.com/logrusorgru/aurora"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/cresta/smallnest-gen/dbmeta"
+	"github.com/cresta/smallnest-gen/template"
 )
 
 var (
@@ -93,9 +92,8 @@ var (
 
 	nameTest = goopt.String([]string{"--name_test"}, "", "perform name test using the --model_naming or --file_naming options")
 
-	baseTemplates *packr.Box
-	tableInfos    map[string]*dbmeta.ModelInfo
-	au            aurora.Aurora
+	tableInfos map[string]*dbmeta.ModelInfo
+	au         aurora.Aurora
 )
 
 func init() {
@@ -116,15 +114,20 @@ git fetch up
 
 func saveTemplates() {
 	fmt.Printf("Saving templates to %s\n", *saveTemplateDir)
-	err := SaveAssets(*saveTemplateDir, baseTemplates)
+	err := SaveAssets(*saveTemplateDir)
 	if err != nil {
 		fmt.Printf("Error saving: %v\n", err)
 	}
 }
 
 func listTemplates() {
-	for i, file := range baseTemplates.List() {
-		fmt.Printf("   [%d] [%s]\n", i, file)
+	files, err := template.FS.ReadDir(".")
+	if err != nil {
+		fmt.Printf("Error reading templates: %v\n", err)
+		return
+	}
+	for i, file := range files {
+		fmt.Printf("   [%d] [%s]\n", i, file.Name())
 	}
 }
 
@@ -155,8 +158,6 @@ func main() {
 	//}
 	au = aurora.NewAurora(!*noColorOutput)
 	dbmeta.InitColorOutput(au)
-
-	baseTemplates = packr.New("gen", "./template")
 
 	if *saveTemplateDir != "" {
 		saveTemplates()
@@ -450,7 +451,7 @@ func initialize(conf *dbmeta.Config) {
 func loadDefaultDBMappings(conf *dbmeta.Config) error {
 	var err error
 	var content []byte
-	content, err = baseTemplates.Find("mapping.json")
+	content, err = template.ReadTemplate("mapping.json")
 	if err != nil {
 		return err
 	}
@@ -465,7 +466,7 @@ func loadDefaultDBMappings(conf *dbmeta.Config) error {
 func executeCustomScript(conf *dbmeta.Config) error {
 	fmt.Printf("Executing script %s\n", *execCustomScript)
 
-	b, err := ioutil.ReadFile(*execCustomScript)
+	b, err := os.ReadFile(*execCustomScript)
 	if err != nil {
 		fmt.Printf("Error Loading exec script: %s, error: %v\n", *execCustomScript, err)
 		return err
@@ -1006,7 +1007,7 @@ func copyTemplatesToTarget() (err error) {
 	}
 
 	fmt.Printf("Saving templates to %s\n", templatesDir)
-	err = SaveAssets(templatesDir, baseTemplates)
+	err = SaveAssets(templatesDir)
 	if err != nil {
 		fmt.Print(au.Red(fmt.Sprintf("Error saving: %v\n", err)))
 	}
@@ -1106,7 +1107,7 @@ func regenCmdLine() []string {
 }
 
 // SaveAssets will save the prepacked templates for local editing. File structure will be recreated under the output dir.
-func SaveAssets(outputDir string, box *packr.Box) error {
+func SaveAssets(outputDir string) error {
 	fmt.Printf("SaveAssets: %v\n", outputDir)
 	if outputDir == "" {
 		outputDir = "."
@@ -1120,21 +1121,30 @@ func SaveAssets(outputDir string, box *packr.Box) error {
 		outputDir = "."
 	}
 
-	_ = box.Walk(func(s string, file packd.File) error {
-		fileName := fmt.Sprintf("%s/%s", outputDir, s)
+	err := fs.WalkDir(template.FS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
 
-		fi, err := file.FileInfo()
-		if err == nil {
-			if !fi.IsDir() {
+		if !d.IsDir() {
+			fileName := fmt.Sprintf("%s/%s", outputDir, path)
 
-				err := WriteNewFile(fileName, file)
-				if err != nil {
-					return err
-				}
+			file, err := template.FS.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			err = WriteNewFile(fileName, file)
+			if err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -1184,7 +1194,7 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 	if *templateDir != "" {
 		fpath := filepath.Join(*templateDir, filename)
 		var b []byte
-		b, err = ioutil.ReadFile(fpath)
+		b, err = os.ReadFile(fpath)
 		if err == nil {
 
 			absPath, err := filepath.Abs(fpath)
@@ -1197,7 +1207,7 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 		}
 	}
 
-	content, err := baseTemplates.FindString(baseName)
+	content, err := template.ReadTemplate(baseName)
 	if err != nil {
 		return nil, fmt.Errorf("%s not found internally", baseName)
 	}
@@ -1205,6 +1215,6 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 		fmt.Printf("Loaded template from app: %s\n", filename)
 	}
 
-	tpl = &dbmeta.GenTemplate{Name: "internal://" + filename, Content: content}
+	tpl = &dbmeta.GenTemplate{Name: "internal://" + filename, Content: string(content)}
 	return tpl, nil
 }

@@ -4,7 +4,6 @@ package {{.Config.GrpcPackageName}}
 import (
     "context"
     "fmt"
-    "io/ioutil"
     "log"
     "os"
 
@@ -114,7 +113,7 @@ type ServerConfig struct {
 // LoadConfig load server configuration from file pointed to from BACKEND_CONFIG env variable
 func LoadConfig() ServerConfig {
     configPath := os.Getenv("BACKEND_CONFIG")
-    content, err := ioutil.ReadFile(configPath)
+    content, err := os.ReadFile(configPath)
     if err != nil {
         log.Fatalf(
             "Error loading config from BACKEND_CONFIG=%s: %v",

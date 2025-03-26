@@ -5,7 +5,6 @@ import (
     "crypto/tls"
     "crypto/x509"
     "fmt"
-    "io/ioutil"
     "log"
     "net"
     "os"
@@ -120,7 +119,7 @@ func getTransportCredentials(cfg ServerConfig) (*credentials.TransportCredential
         return nil, err
     }
 
-    caCert, err := ioutil.ReadFile(cfg.CACert)
+    caCert, err := os.ReadFile(cfg.CACert)
     if err != nil {
         return nil, err
     }

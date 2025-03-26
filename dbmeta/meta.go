@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -608,7 +608,7 @@ func LoadMappings(mappingFileName string, verbose bool) error {
 	defer func() {
 		_ = mappingFile.Close()
 	}()
-	byteValue, err := ioutil.ReadAll(mappingFile)
+	byteValue, err := io.ReadAll(mappingFile)
 	if err != nil {
 		fmt.Printf("Error loading mapping file %s error: %v\n", mappingFileName, err)
 		return err
