@@ -10,21 +10,20 @@ import (
 
 	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/droundy/goopt"
-	"github.com/gobuffalo/packr/v2"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/cresta/smallnest-gen/dbmeta"
+	"github.com/cresta/smallnest-gen/template"
 )
 
 var (
-	sqlType       = goopt.String([]string{"--sqltype"}, "mysql", "sql database type such as [ mysql, mssql, postgres, sqlite, etc. ]")
-	sqlConnStr    = goopt.String([]string{"-c", "--connstr"}, "nil", "database connection string")
-	sqlDatabase   = goopt.String([]string{"-d", "--database"}, "nil", "Database to for connection")
-	sqlTable      = goopt.String([]string{"-t", "--table"}, "", "Table to build struct from")
-	templateDir   = goopt.String([]string{"--templateDir"}, "./template", "Template Dir")
-	baseTemplates *packr.Box
+	sqlType     = goopt.String([]string{"--sqltype"}, "mysql", "sql database type such as [ mysql, mssql, postgres, sqlite, etc. ]")
+	sqlConnStr  = goopt.String([]string{"-c", "--connstr"}, "nil", "database connection string")
+	sqlDatabase = goopt.String([]string{"-d", "--database"}, "nil", "Database to for connection")
+	sqlTable    = goopt.String([]string{"-t", "--table"}, "", "Table to build struct from")
+	templateDir = goopt.String([]string{"--templateDir"}, "./template", "Template Dir")
 )
 
 func init() {
@@ -56,8 +55,6 @@ func GenHelp() string {
 
 func main() {
 
-	baseTemplates = packr.New("gen", "../template")
-
 	err := loadDefaultDBMappings()
 	if err != nil {
 		fmt.Printf("Error processing default mapping file error: %v\n", err)
@@ -87,10 +84,11 @@ func main() {
 	conf := dbmeta.NewConfig(LoadTemplate)
 	initialize(conf)
 
-	dbTables := []string{*sqlTable}
+	var dbTables []dbmeta.TableSchemaAndName
 	excludedDbTables := []string{}
 
-	tableInfos := dbmeta.LoadTableInfo(db, dbTables, excludedDbTables, conf)
+	var schemas map[string]bool
+	tableInfos := dbmeta.LoadTableInfo(db, &schemas, dbTables, excludedDbTables, conf)
 	conf.ContextMap["tableInfos"] = tableInfos
 
 	for tableName, modelInfo := range tableInfos {
@@ -226,7 +224,7 @@ func initializeDB() (db *sql.DB, err error) {
 func loadDefaultDBMappings() error {
 	var err error
 	var content []byte
-	content, err = baseTemplates.Find("mapping.json")
+	content, err = template.ReadTemplate("mapping.json")
 	if err != nil {
 		return err
 	}
@@ -259,11 +257,11 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 		}
 	}
 
-	content, err := baseTemplates.FindString(baseName)
+	content, err := template.ReadTemplate(baseName)
 	if err != nil {
 		return nil, fmt.Errorf("%s not found internally", baseName)
 	}
 
-	tpl = &dbmeta.GenTemplate{Name: "internal://" + filename, Content: content}
+	tpl = &dbmeta.GenTemplate{Name: "internal://" + filename, Content: string(content)}
 	return tpl, nil
 }
