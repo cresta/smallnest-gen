@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -140,7 +140,7 @@ func writeRowsAffected(w http.ResponseWriter, rowsAffected int64) {
 }
 
 func readJSON(r *http.Request, v interface{}) error {
-	buf, err := ioutil.ReadAll(r.Body)
+	buf, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}

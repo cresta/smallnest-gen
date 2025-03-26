@@ -8,7 +8,6 @@ import (
 	"go/build"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -467,7 +466,7 @@ func loadDefaultDBMappings(conf *dbmeta.Config) error {
 func executeCustomScript(conf *dbmeta.Config) error {
 	fmt.Printf("Executing script %s\n", *execCustomScript)
 
-	b, err := ioutil.ReadFile(*execCustomScript)
+	b, err := os.ReadFile(*execCustomScript)
 	if err != nil {
 		fmt.Printf("Error Loading exec script: %s, error: %v\n", *execCustomScript, err)
 		return err
@@ -1195,7 +1194,7 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 	if *templateDir != "" {
 		fpath := filepath.Join(*templateDir, filename)
 		var b []byte
-		b, err = ioutil.ReadFile(fpath)
+		b, err = os.ReadFile(fpath)
 		if err == nil {
 
 			absPath, err := filepath.Abs(fpath)

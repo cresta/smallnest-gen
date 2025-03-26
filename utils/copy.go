@@ -3,7 +3,6 @@ package utils
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -113,27 +112,30 @@ func dcopy(srcdir, destdir string, info os.FileInfo, opt Options, results *Resul
 	originalMode := info.Mode()
 	// Make dest dir with 0755 so that everything writable.
 	if err = os.MkdirAll(destdir, tmpPermissionForDirectory); err != nil {
-		return
+		return err
 	}
 	results.DirsCopied++
 	// Recover dir mode with original one.
 	defer chmod(destdir, originalMode|opt.AddPermission, &err)
 
-	contents, err := ioutil.ReadDir(srcdir)
+	contents, err := os.ReadDir(srcdir)
 	if err != nil {
-		return
+		return err
 	}
 
 	for _, content := range contents {
 		cs, cd := filepath.Join(srcdir, content.Name()), filepath.Join(destdir, content.Name())
-
-		if err = copy(cs, cd, content, opt, results); err != nil {
+		info, err := content.Info()
+		if err != nil {
+			return err
+		}
+		if err = copy(cs, cd, info, opt, results); err != nil {
 			// If any error, exit immediately
-			return
+			return err
 		}
 	}
 
-	return
+	return nil
 }
 
 func onsymlink(src, dest string, info os.FileInfo, opt Options, results *Results) error {

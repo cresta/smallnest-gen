@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -141,7 +141,7 @@ func genreadme(conf *dbmeta.Config, templateName, outputFile string, ctx map[str
 func loadFile(src string) string {
 	// Read entire file content, giving us little control but
 	// making it very simple. No need to close the file.
-	content, err := ioutil.ReadFile(src)
+	content, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Sprintf("error loading %s error: %v", src, err)
 	}
@@ -244,7 +244,7 @@ func LoadTemplate(filename string) (tpl *dbmeta.GenTemplate, err error) {
 	if *templateDir != "" {
 		fpath := filepath.Join(*templateDir, filename)
 		var b []byte
-		b, err = ioutil.ReadFile(fpath)
+		b, err = os.ReadFile(fpath)
 		if err == nil {
 
 			absPath, err := filepath.Abs(fpath)
