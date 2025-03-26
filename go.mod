@@ -1,6 +1,6 @@
 module github.com/cresta/smallnest-gen
 
-go 1.22
+go 1.24
 
 require (
 	github.com/bxcodec/faker/v3 v3.6.0
