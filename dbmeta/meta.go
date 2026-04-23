@@ -61,6 +61,11 @@ type SQLMapping struct {
 
 	// SwaggerType mapped type
 	SwaggerType string `json:"swagger_type"`
+
+	// PrimaryKeyParseAs names a built-in Go type (e.g. int32, string) whose path parser
+	// should be used when the mapped go_type is different (e.g. a protobuf enum).
+	// See column comment primary_key_parse_as for a per-column override.
+	PrimaryKeyParseAs string `json:"primary_key_parse_as,omitempty"`
 }
 
 type ImportPackageName string
@@ -71,7 +76,7 @@ type ImportItem struct {
 	ShortName string
 }
 
-func (m *SQLMapping) String() interface{} {
+func (m *SQLMapping) String() any {
 	return fmt.Sprintf("SQLType: %-15s  GoType: %-15s GureguType: %-15s GoNullableType: %-15s JSONType: %-15s ProtobufType: %-15s",
 		m.SQLType,
 		m.GoType, m.GureguType, m.GoNullableType,
@@ -282,7 +287,7 @@ type ModelInfo struct {
 	TableSchemaAndName TableSchemaAndName
 	Fields             []string
 	DBMeta             DbTableMeta
-	Instance           interface{}
+	Instance           any
 	CodeFields         []*FieldInfo
 	Imports            []*ImportItem
 }
@@ -319,20 +324,23 @@ type FieldInfo struct {
 	Comment               string
 	Notes                 string
 	Code                  string
-	FakeData              interface{}
+	FakeData              any
 	ColumnMeta            ColumnMeta
 	PrimaryKeyFieldParser string
-	PrimaryKeyArgName     string
-	SQLMapping            *SQLMapping
-	GormAnnotation        string
-	JSONAnnotation        string
-	XMLAnnotation         string
-	DBAnnotation          string
-	GoGoMoreTags          string
+	// PrimaryKeyCastFromParse is true when path params are parsed with PrimaryKeyParseAs
+	// (or an equivalent primitive) and then cast to GoFieldType.
+	PrimaryKeyCastFromParse bool
+	PrimaryKeyArgName       string
+	SQLMapping              *SQLMapping
+	GormAnnotation          string
+	JSONAnnotation          string
+	XMLAnnotation           string
+	DBAnnotation            string
+	GoGoMoreTags            string
 }
 
 // GetFunctionName get function name
-func GetFunctionName(i interface{}) string {
+func GetFunctionName(i any) string {
 	return runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 }
 
@@ -427,7 +435,7 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		// fmt.Printf("protobufType: %v  DatabaseTypeName: %v\n", protobufType, col.DatabaseTypeName())
 
-		fakeData := createFakeData(goType, fieldName)
+		fakeData := createFakeData(goType)
 
 		//if c.Verbose {
 		//	fmt.Printf("table: %-10s type: %-10s fieldname: %-20s val: %v\n", c.DatabaseTypeName(), goType, fieldName, fakeData)
@@ -436,10 +444,17 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		//fmt.Printf("%+v", fakeData)
 		primaryKeyFieldParser := ""
+		fi.PrimaryKeyCastFromParse = false
 		if col.IsPrimaryKey() {
-			var ok bool
-			primaryKeyFieldParser, ok = parsePrimaryKeys[goType]
-			if !ok {
+			pkParserType := primaryKeyParseAsFromComment(col.Comment())
+			if pkParserType != "" {
+				fi.PrimaryKeyCastFromParse = true
+			} else {
+				pkParserType = goType
+			}
+			if pkParser, ok := parsePrimaryKeys[pkParserType]; ok {
+				primaryKeyFieldParser = pkParser
+			} else {
 				primaryKeyFieldParser = "unsupported"
 			}
 		}
@@ -566,10 +581,10 @@ func createGormAnnotation(c ColumnMeta) string {
 // BuildDefaultTableDDL create a ddl mock using the ColumnMeta data
 func BuildDefaultTableDDL(tableSchemaAndName TableSchemaAndName, cols []*columnMeta) string {
 	buf := bytes.Buffer{}
-	buf.WriteString(fmt.Sprintf("Table: %s\n", tableSchemaAndName))
+	fmt.Fprintf(&buf, "Table: %s\n", tableSchemaAndName)
 
 	for _, ct := range cols {
-		buf.WriteString(fmt.Sprintf("%s\n", ct.String()))
+		fmt.Fprintf(&buf, "%s\n", ct.String())
 	}
 	return buf.String()
 }
@@ -622,12 +637,26 @@ func LoadMappings(mappingFileName string, verbose bool) error {
 	return ProcessMappings(absPath, byteValue, verbose)
 }
 
+// primaryKeyParseAsFromComment returns primary_key_parse_as from a column comment
+// when written as a struct tag fragment, e.g. `primary_key_parse_as:"int32"`.
+func primaryKeyParseAsFromComment(comment string) string {
+	if !strings.Contains(comment, `primary_key_parse_as:"`) {
+		return ""
+	}
+	tags := reflect.StructTag(comment)
+	val, ok := tags.Lookup("primary_key_parse_as")
+	if !ok {
+		return ""
+	}
+	return val
+}
+
 // SQLTypeToGoType map a sql type to a go type
 func SQLTypeToGoType(sqlType string, comment string, nullable bool, gureguTypes bool) (string, error) {
 	if comment != "" {
 		fmt.Printf("comment: %s\n", comment)
 	}
-	if strings.Index(comment, `go_type:"`) >= 0 {
+	if strings.Contains(comment, `go_type:"`) {
 		tags := reflect.StructTag(comment)
 		val, ok := tags.Lookup("go_type")
 		if ok {
@@ -685,7 +714,7 @@ func GetMappings() map[string]*SQLMapping {
 	return sqlMappings
 }
 
-func createFakeData(valueType string, name string) interface{} {
+func createFakeData(valueType string) any {
 
 	switch valueType {
 	case "[]byte":
@@ -704,7 +733,7 @@ func createFakeData(valueType string, name string) interface{} {
 		return "hello world"
 	case "time.Time":
 		return time.Now()
-	case "interface{}":
+	case "interface{}", "any":
 		return 1
 	default:
 		return 1
@@ -758,7 +787,7 @@ func LoadTableInfo(db *sql.DB, schemas *map[string]bool, dbTables []TableSchemaA
 			if au != nil {
 				fmt.Print(au.Yellow(msg))
 			} else {
-				fmt.Printf(msg)
+				fmt.Print(msg)
 			}
 
 			continue
@@ -770,7 +799,7 @@ func LoadTableInfo(db *sql.DB, schemas *map[string]bool, dbTables []TableSchemaA
 			if au != nil {
 				fmt.Print(au.Red(msg))
 			} else {
-				fmt.Printf(msg)
+				fmt.Print(msg)
 			}
 
 			continue
@@ -845,7 +874,7 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	for _, f := range fields {
 
 		if f.PrimaryKeyFieldParser == "unsupported" {
-			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s",
+			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s (set primary_key_parse_as in mapping.json or column comment `primary_key_parse_as:\"int32\"` when the Go type is an int-backed enum or alias)",
 				dbMeta.TableName(), f.ColumnMeta.Index(), f.ColumnMeta.Name(), f.ColumnMeta.DatabaseTypeName(), f.GoFieldType)
 		}
 		code = append(code, f.Code)

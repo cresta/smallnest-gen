@@ -143,8 +143,8 @@ type InformationSchema struct {
 	OrdinalPosition        int
 	ColumnName             string
 	DataType               string
-	CharacterMaximumLength interface{}
-	ColumnDefault          interface{}
+	CharacterMaximumLength any
+	ColumnDefault          any
 	IsNullable             string
 }
 
@@ -213,7 +213,7 @@ func cleanupDefault(val string) string {
 		return cleanupDefault(val[1 : len(val)-1])
 	}
 
-	if strings.Index(val, "nextval(") == 0 && strings.Index(val, "::regclass)") > -1 {
+	if strings.Index(val, "nextval(") == 0 && strings.Contains(val, "::regclass)") {
 		return ""
 	}
 
@@ -262,7 +262,7 @@ func updateDefaultPrimaryKey(m *dbTableMeta) *dbTableMeta {
 		if au != nil {
 			fmt.Print(au.Yellow(comments))
 		} else {
-			fmt.Printf(comments)
+			fmt.Print(comments)
 		}
 
 		primaryKeyPos = 0
@@ -276,7 +276,7 @@ func updateDefaultPrimaryKey(m *dbTableMeta) *dbTableMeta {
 		if au != nil {
 			fmt.Print(au.Yellow(comments))
 		} else {
-			fmt.Printf(comments)
+			fmt.Print(comments)
 		}
 
 		m.columns[primaryKeyPos].nullable = false
