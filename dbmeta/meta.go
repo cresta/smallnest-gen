@@ -61,19 +61,6 @@ type SQLMapping struct {
 
 	// SwaggerType mapped type
 	SwaggerType string `json:"swagger_type"`
-
-	// PrimaryKeyParseAs names a built-in Go type (e.g. int32, string) whose path parser
-	// should be used when the mapped go_type is different (e.g. a protobuf enum).
-	// See column comment primary_key_parse_as for a per-column override.
-	PrimaryKeyParseAs string `json:"primary_key_parse_as,omitempty"`
-}
-
-type ImportPackageName string
-
-// ImportItem stores Go import package and its short name
-type ImportItem struct {
-	Package   ImportPackageName
-	ShortName string
 }
 
 func (m *SQLMapping) String() any {
@@ -290,6 +277,7 @@ type ModelInfo struct {
 	Instance           any
 	CodeFields         []*FieldInfo
 	Imports            []*ImportItem
+	PkFieldImports     []*ImportItem
 }
 
 // Notes notes on table generation
@@ -327,8 +315,8 @@ type FieldInfo struct {
 	FakeData              any
 	ColumnMeta            ColumnMeta
 	PrimaryKeyFieldParser string
-	// PrimaryKeyCastFromParse is true when path params are parsed with PrimaryKeyParseAs
-	// (or an equivalent primitive) and then cast to GoFieldType.
+	// PrimaryKeyCastFromParse is true when the path param is parsed using the SQL type's
+	// default mapped Go type (ignoring go_type column comment), then cast to GoFieldType.
 	PrimaryKeyCastFromParse bool
 	PrimaryKeyArgName       string
 	SQLMapping              *SQLMapping
@@ -359,12 +347,11 @@ func LoadMeta(sqlType string, db *sql.DB, sqlDatabase string, tableSchemaAndName
 }
 
 // GenerateFieldsTypes FieldInfo slice from DbTableMeta
-func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*ImportItem, error) {
+func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *ImportsMap, error) {
 
 	var fields []*FieldInfo
 	field := ""
-	importByPackageName := map[ImportPackageName]*ImportItem{}
-	importByShortName := map[string]*ImportItem{}
+	importsMap := &ImportsMap{}
 	for i, col := range dbMeta.Columns() {
 		fieldName := col.Name()
 
@@ -373,7 +360,7 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 		}
 
 		valueType, err := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), col.Comment(), col.Nullable(), c.UseGureguTypes)
-		valueType = ExtractImport(importByPackageName, importByShortName, valueType)
+		valueType = importsMap.ExtractImport(valueType, col.IsPrimaryKey())
 		if err != nil { // unknown type
 			fmt.Printf("table: %s unable to generate struct field: %s type: %s error: %v\n", dbMeta.TableName(), fieldName, col.DatabaseTypeName(), err)
 			continue
@@ -430,7 +417,7 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		sqlMapping, _ := SQLTypeToMapping(strings.ToLower(col.DatabaseTypeName()))
 		goType, _ := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), col.Comment(), false, false)
-		goType = ExtractImport(importByPackageName, importByShortName, goType)
+		goType = importsMap.ExtractImport(goType, col.IsPrimaryKey())
 		protobufType, _ := SQLTypeToProtobufType(col.DatabaseTypeName())
 
 		// fmt.Printf("protobufType: %v  DatabaseTypeName: %v\n", protobufType, col.DatabaseTypeName())
@@ -446,15 +433,22 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 		primaryKeyFieldParser := ""
 		fi.PrimaryKeyCastFromParse = false
 		if col.IsPrimaryKey() {
-			pkParserType := primaryKeyParseAsFromComment(col.Comment())
-			if pkParserType != "" {
-				fi.PrimaryKeyCastFromParse = true
-			} else {
-				pkParserType = goType
-			}
-			if pkParser, ok := parsePrimaryKeys[pkParserType]; ok {
+			if pkParser, ok := parsePrimaryKeys[goType]; ok {
 				primaryKeyFieldParser = pkParser
 			} else {
+				// Ignore column go_type comment: use the same mapped Go type as if no comment
+				// was set, so path parsing follows the SQL type's default mapping.
+				// Remark: we are not even using the pk parser anywhere in cresta, but using it now rather as a validation restriction
+				fallbackGoType, err := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), "", false, false)
+				if err == nil {
+					fallbackGoType = importsMap.ExtractImport(fallbackGoType, true)
+					if pkParser, ok := parsePrimaryKeys[fallbackGoType]; ok {
+						primaryKeyFieldParser = pkParser
+						fi.PrimaryKeyCastFromParse = goType != fallbackGoType
+					}
+				}
+			}
+			if primaryKeyFieldParser == "" {
 				primaryKeyFieldParser = "unsupported"
 			}
 		}
@@ -479,12 +473,8 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		fields = append(fields, fi)
 	}
-	imports := make([]*ImportItem, 0, len(importByPackageName))
-	for _, item := range importByPackageName {
-		imports = append(imports, item)
-	}
 
-	return fields, imports, nil
+	return fields, importsMap, nil
 }
 
 func formatFieldName(nameFormat string, name string) string {
@@ -635,20 +625,6 @@ func LoadMappings(mappingFileName string, verbose bool) error {
 	}
 
 	return ProcessMappings(absPath, byteValue, verbose)
-}
-
-// primaryKeyParseAsFromComment returns primary_key_parse_as from a column comment
-// when written as a struct tag fragment, e.g. `primary_key_parse_as:"int32"`.
-func primaryKeyParseAsFromComment(comment string) string {
-	if !strings.Contains(comment, `primary_key_parse_as:"`) {
-		return ""
-	}
-	tags := reflect.StructTag(comment)
-	val, ok := tags.Lookup("primary_key_parse_as")
-	if !ok {
-		return ""
-	}
-	return val
 }
 
 // SQLTypeToGoType map a sql type to a go type
@@ -833,7 +809,7 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	structName := Replace(conf.ModelNamingTemplate, tableSchemaAndName.TableName)
 	structName = CheckForDupeTable(tables, structName)
 
-	fields, imports, err := conf.GenerateFieldsTypes(dbMeta)
+	fields, importsMap, err := conf.GenerateFieldsTypes(dbMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -874,7 +850,7 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	for _, f := range fields {
 
 		if f.PrimaryKeyFieldParser == "unsupported" {
-			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s (set primary_key_parse_as in mapping.json or column comment `primary_key_parse_as:\"int32\"` when the Go type is an int-backed enum or alias)",
+			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s (path parser uses the mapped Go type, or the same SQL type as if no go_type column comment was set)",
 				dbMeta.TableName(), f.ColumnMeta.Index(), f.ColumnMeta.Name(), f.ColumnMeta.DatabaseTypeName(), f.GoFieldType)
 		}
 		code = append(code, f.Code)
@@ -889,7 +865,8 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 		CodeFields:         fields,
 		DBMeta:             dbMeta,
 		Instance:           instance,
-		Imports:            imports,
+		Imports:            importsMap.GetImports(),
+		PkFieldImports:     importsMap.GetPKImports(),
 	}
 
 	return modelInfo, nil

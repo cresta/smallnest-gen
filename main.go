@@ -471,7 +471,7 @@ func executeCustomScript(conf *dbmeta.Config) error {
 		fmt.Printf("Error Loading exec script: %s, error: %v\n", *execCustomScript, err)
 		return err
 	}
-	data := map[string]interface{}{}
+	data := map[string]any{}
 
 	absPath, err := filepath.Abs(*execCustomScript)
 	if err != nil {
@@ -489,7 +489,7 @@ func executeCustomScript(conf *dbmeta.Config) error {
 	return nil
 }
 
-func execTemplate(conf *dbmeta.Config, genTemplate *dbmeta.GenTemplate, data map[string]interface{}) error {
+func execTemplate(conf *dbmeta.Config, genTemplate *dbmeta.GenTemplate, data map[string]any) error {
 	data["DatabaseName"] = *sqlDatabase
 	data["module"] = *module
 	data["modelFQPN"] = conf.ModelFQPN
@@ -659,7 +659,7 @@ func generate(conf *dbmeta.Config) error {
 		}
 	}
 
-	data := map[string]interface{}{}
+	data := map[string]any{}
 
 	if *restAPIGenerate {
 		if err = generateRestBaseFiles(conf, apiDir); err != nil {
@@ -701,7 +701,7 @@ func generate(conf *dbmeta.Config) error {
 		}
 	}
 
-	data = map[string]interface{}{
+	data = map[string]any{
 		"deps":        "go list -f '{{ join .Deps  \"\\n\"}}' .",
 		"CommandLine": conf.CmdLine,
 		"Config":      conf,
@@ -733,7 +733,7 @@ func generate(conf *dbmeta.Config) error {
 }
 
 func generateRestBaseFiles(conf *dbmeta.Config, apiDir string) (err error) {
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	var RouterTmpl *dbmeta.GenTemplate
 	var HTTPUtilsTmpl *dbmeta.GenTemplate
 
@@ -769,7 +769,7 @@ func generateMakefile(conf *dbmeta.Config) (err error) {
 		return
 	}
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"deps":             "go list -f '{{ join .Deps  \"\\n\"}}' .",
 		"RegenCmdLineArgs": regenCmdLine(),
 		"RegenCmdLine":     strings.Join(regenCmdLine(), " \\\n    "),
@@ -788,7 +788,7 @@ func generateMakefile(conf *dbmeta.Config) (err error) {
 	return nil
 }
 
-func generateProtobufDefinitionFile(conf *dbmeta.Config, data map[string]interface{}) (err error) {
+func generateProtobufDefinitionFile(conf *dbmeta.Config, data map[string]any) (err error) {
 	moduleDir := filepath.Join(*outDir, conf.ModelPackageName)
 	serverDir := filepath.Join(*outDir, conf.GrpcPackageName)
 	err = os.MkdirAll(serverDir, 0777)
@@ -927,7 +927,7 @@ func GoFmt(codeDir string) (string, error) {
 	return string(stdoutStderr), nil
 }
 
-func generateProjectFiles(conf *dbmeta.Config, data map[string]interface{}) (err error) {
+func generateProjectFiles(conf *dbmeta.Config, data map[string]any) (err error) {
 	var GitIgnoreTmpl *dbmeta.GenTemplate
 	if GitIgnoreTmpl, err = LoadTemplate("gitignore.tmpl"); err != nil {
 		fmt.Print(au.Red(fmt.Sprintf("Error loading template %v\n", err)))
@@ -954,7 +954,7 @@ func generateProjectFiles(conf *dbmeta.Config, data map[string]interface{}) (err
 	return nil
 }
 
-func populateProtoCinContext(conf *dbmeta.Config, data map[string]interface{}) {
+func populateProtoCinContext(conf *dbmeta.Config, data map[string]any) {
 	protofile := fmt.Sprintf("%s.proto", *sqlDatabase)
 	moduleDir := filepath.Join(*outDir, conf.ModelPackageName)
 	protocCmdLineArgs, err := createProtocCmdLine(*outDir, moduleDir, filepath.Join(*outDir, protofile))
@@ -968,7 +968,7 @@ func populateProtoCinContext(conf *dbmeta.Config, data map[string]interface{}) {
 }
 
 func generateServerCode(conf *dbmeta.Config) (err error) {
-	data := map[string]interface{}{}
+	data := map[string]any{}
 	var MainServerTmpl *dbmeta.GenTemplate
 
 	if *addGormAnnotation {
