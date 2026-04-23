@@ -16,12 +16,20 @@ func Update{{.StructName}}(w http.ResponseWriter, r *http.Request, ps httprouter
 	ctx := initializeContext(r)
 {{range $field := .TableInfo.CodeFields}}
 {{ if $field.PrimaryKeyArgName }}
-
+{{ if $field.PrimaryKeyCastFromParse }}
+	{{$field.PrimaryKeyArgName}}_raw, err := {{$field.PrimaryKeyFieldParser}}(ps, "{{$field.PrimaryKeyArgName}}")
+	if err != nil {
+		returnError(ctx, w, r, err)
+		return
+	}
+	{{$field.PrimaryKeyArgName}} := {{$field.GoFieldType}}({{$field.PrimaryKeyArgName}}_raw)
+{{ else }}
 	{{$field.PrimaryKeyArgName}}, err := {{$field.PrimaryKeyFieldParser}}(ps, "{{$field.PrimaryKeyArgName}}")
 	if err != nil {
 		returnError(ctx, w, r, err)
 		return
 	}
+{{ end }}
 {{end}}{{end}}
 
 	{{.StructName | toLower}} := &{{.modelPackageName}}.{{.StructName}}{}

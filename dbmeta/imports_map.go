@@ -20,6 +20,15 @@ type ImportsMap struct {
 	pkSpecificImports map[ImportPackageName]*ImportItem
 }
 
+// NewImportsMap returns an ImportsMap with initialized internal maps.
+func NewImportsMap() *ImportsMap {
+	return &ImportsMap{
+		byShortName:        make(map[string]*ImportItem),
+		byPackageName:      make(map[ImportPackageName]*ImportItem),
+		pkSpecificImports:  make(map[ImportPackageName]*ImportItem),
+	}
+}
+
 // ExtractImport finds the import package from goType, add it to import maps, and replace it with valid field type format.
 func (m *ImportsMap) ExtractImport(goType string, isPrimaryKey bool) string {
 	parts := strings.Split(goType, ":")

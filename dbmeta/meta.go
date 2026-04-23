@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -351,7 +350,7 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *Imports
 
 	var fields []*FieldInfo
 	field := ""
-	importsMap := &ImportsMap{}
+	importsMap := NewImportsMap()
 	for i, col := range dbMeta.Columns() {
 		fieldName := col.Name()
 
@@ -944,39 +943,4 @@ func checkDupeProtoBufFieldName(fields []*FieldInfo, fieldName string) string {
 func generateAlternativeName(name string) string {
 	name = name + "alt1"
 	return name
-}
-
-// ExtractImport finds the import package from goType, add it to import maps, and replace it with valid field type format.
-func ExtractImport(importByPackageName map[ImportPackageName]*ImportItem, importByShortName map[string]*ImportItem, goType string) string {
-	parts := strings.Split(goType, ":")
-	if len(parts) != 2 {
-		return goType
-	}
-	packageName := ImportPackageName(parts[0])
-	typeName := parts[1]
-	var shortName string
-	importPackage, ok := importByPackageName[packageName]
-	if ok {
-		shortName = importPackage.ShortName
-	} else {
-		packageParts := strings.Split(string(packageName), "/")
-		shortName = packageParts[len(packageParts)-1]
-		shortName = string(regexNotAlphanum.ReplaceAll([]byte(shortName), []byte("")))
-		suffix := 0
-		initialShortName := shortName
-		for {
-			if _, ok := importByShortName[shortName]; !ok {
-				break
-			}
-			suffix++
-			shortName = initialShortName + strconv.Itoa(suffix)
-		}
-	}
-	importItem := &ImportItem{
-		Package:   packageName,
-		ShortName: shortName,
-	}
-	importByPackageName[packageName] = importItem
-	importByShortName[shortName] = importItem
-	return shortName + "." + typeName
 }
