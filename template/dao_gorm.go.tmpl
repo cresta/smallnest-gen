@@ -5,7 +5,9 @@ import (
     "time"
 
 	"{{.modelFQPN}}"
-
+{{range .TableInfo.PkFieldImports}}
+	{{.ShortName}} "{{.Package}}"
+{{end}}
     {{if .UseGuregu}} "github.com/guregu/null" {{end}}
     "github.com/satori/go.uuid"
 )

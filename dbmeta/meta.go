@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -63,15 +62,7 @@ type SQLMapping struct {
 	SwaggerType string `json:"swagger_type"`
 }
 
-type ImportPackageName string
-
-// ImportItem stores Go import package and its short name
-type ImportItem struct {
-	Package   ImportPackageName
-	ShortName string
-}
-
-func (m *SQLMapping) String() interface{} {
+func (m *SQLMapping) String() any {
 	return fmt.Sprintf("SQLType: %-15s  GoType: %-15s GureguType: %-15s GoNullableType: %-15s JSONType: %-15s ProtobufType: %-15s",
 		m.SQLType,
 		m.GoType, m.GureguType, m.GoNullableType,
@@ -282,9 +273,10 @@ type ModelInfo struct {
 	TableSchemaAndName TableSchemaAndName
 	Fields             []string
 	DBMeta             DbTableMeta
-	Instance           interface{}
+	Instance           any
 	CodeFields         []*FieldInfo
 	Imports            []*ImportItem
+	PkFieldImports     []*ImportItem
 }
 
 // Notes notes on table generation
@@ -319,20 +311,23 @@ type FieldInfo struct {
 	Comment               string
 	Notes                 string
 	Code                  string
-	FakeData              interface{}
+	FakeData              any
 	ColumnMeta            ColumnMeta
 	PrimaryKeyFieldParser string
-	PrimaryKeyArgName     string
-	SQLMapping            *SQLMapping
-	GormAnnotation        string
-	JSONAnnotation        string
-	XMLAnnotation         string
-	DBAnnotation          string
-	GoGoMoreTags          string
+	// PrimaryKeyCastFromParse is true when the path param is parsed using the SQL type's
+	// default mapped Go type (ignoring go_type column comment), then cast to GoFieldType.
+	PrimaryKeyCastFromParse bool
+	PrimaryKeyArgName       string
+	SQLMapping              *SQLMapping
+	GormAnnotation          string
+	JSONAnnotation          string
+	XMLAnnotation           string
+	DBAnnotation            string
+	GoGoMoreTags            string
 }
 
 // GetFunctionName get function name
-func GetFunctionName(i interface{}) string {
+func GetFunctionName(i any) string {
 	return runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 }
 
@@ -351,12 +346,11 @@ func LoadMeta(sqlType string, db *sql.DB, sqlDatabase string, tableSchemaAndName
 }
 
 // GenerateFieldsTypes FieldInfo slice from DbTableMeta
-func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*ImportItem, error) {
+func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *ImportsMap, error) {
 
 	var fields []*FieldInfo
 	field := ""
-	importByPackageName := map[ImportPackageName]*ImportItem{}
-	importByShortName := map[string]*ImportItem{}
+	importsMap := NewImportsMap()
 	for i, col := range dbMeta.Columns() {
 		fieldName := col.Name()
 
@@ -365,7 +359,7 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 		}
 
 		valueType, err := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), col.Comment(), col.Nullable(), c.UseGureguTypes)
-		valueType = ExtractImport(importByPackageName, importByShortName, valueType)
+		valueType = importsMap.ExtractImport(valueType, col.IsPrimaryKey())
 		if err != nil { // unknown type
 			fmt.Printf("table: %s unable to generate struct field: %s type: %s error: %v\n", dbMeta.TableName(), fieldName, col.DatabaseTypeName(), err)
 			continue
@@ -422,12 +416,12 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		sqlMapping, _ := SQLTypeToMapping(strings.ToLower(col.DatabaseTypeName()))
 		goType, _ := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), col.Comment(), false, false)
-		goType = ExtractImport(importByPackageName, importByShortName, goType)
+		goType = importsMap.ExtractImport(goType, col.IsPrimaryKey())
 		protobufType, _ := SQLTypeToProtobufType(col.DatabaseTypeName())
 
 		// fmt.Printf("protobufType: %v  DatabaseTypeName: %v\n", protobufType, col.DatabaseTypeName())
 
-		fakeData := createFakeData(goType, fieldName)
+		fakeData := createFakeData(goType)
 
 		//if c.Verbose {
 		//	fmt.Printf("table: %-10s type: %-10s fieldname: %-20s val: %v\n", c.DatabaseTypeName(), goType, fieldName, fakeData)
@@ -436,10 +430,24 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		//fmt.Printf("%+v", fakeData)
 		primaryKeyFieldParser := ""
+		fi.PrimaryKeyCastFromParse = false
 		if col.IsPrimaryKey() {
-			var ok bool
-			primaryKeyFieldParser, ok = parsePrimaryKeys[goType]
-			if !ok {
+			if pkParser, ok := parsePrimaryKeys[goType]; ok {
+				primaryKeyFieldParser = pkParser
+			} else {
+				// Ignore column go_type comment: use the same mapped Go type as if no comment
+				// was set, so path parsing follows the SQL type's default mapping.
+				// Remark: we are not even using the pk parser anywhere in cresta, but using it now rather as a validation restriction
+				fallbackGoType, err := SQLTypeToGoType(strings.ToLower(col.DatabaseTypeName()), "", false, false)
+				if err == nil {
+					fallbackGoType = importsMap.ExtractImport(fallbackGoType, true)
+					if pkParser, ok := parsePrimaryKeys[fallbackGoType]; ok {
+						primaryKeyFieldParser = pkParser
+						fi.PrimaryKeyCastFromParse = goType != fallbackGoType
+					}
+				}
+			}
+			if primaryKeyFieldParser == "" {
 				primaryKeyFieldParser = "unsupported"
 			}
 		}
@@ -464,12 +472,8 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, []*Impor
 
 		fields = append(fields, fi)
 	}
-	imports := make([]*ImportItem, 0, len(importByPackageName))
-	for _, item := range importByPackageName {
-		imports = append(imports, item)
-	}
 
-	return fields, imports, nil
+	return fields, importsMap, nil
 }
 
 func formatFieldName(nameFormat string, name string) string {
@@ -566,10 +570,10 @@ func createGormAnnotation(c ColumnMeta) string {
 // BuildDefaultTableDDL create a ddl mock using the ColumnMeta data
 func BuildDefaultTableDDL(tableSchemaAndName TableSchemaAndName, cols []*columnMeta) string {
 	buf := bytes.Buffer{}
-	buf.WriteString(fmt.Sprintf("Table: %s\n", tableSchemaAndName))
+	fmt.Fprintf(&buf, "Table: %s\n", tableSchemaAndName)
 
 	for _, ct := range cols {
-		buf.WriteString(fmt.Sprintf("%s\n", ct.String()))
+		fmt.Fprintf(&buf, "%s\n", ct.String())
 	}
 	return buf.String()
 }
@@ -627,7 +631,7 @@ func SQLTypeToGoType(sqlType string, comment string, nullable bool, gureguTypes 
 	if comment != "" {
 		fmt.Printf("comment: %s\n", comment)
 	}
-	if strings.Index(comment, `go_type:"`) >= 0 {
+	if strings.Contains(comment, `go_type:"`) {
 		tags := reflect.StructTag(comment)
 		val, ok := tags.Lookup("go_type")
 		if ok {
@@ -685,7 +689,7 @@ func GetMappings() map[string]*SQLMapping {
 	return sqlMappings
 }
 
-func createFakeData(valueType string, name string) interface{} {
+func createFakeData(valueType string) any {
 
 	switch valueType {
 	case "[]byte":
@@ -704,7 +708,7 @@ func createFakeData(valueType string, name string) interface{} {
 		return "hello world"
 	case "time.Time":
 		return time.Now()
-	case "interface{}":
+	case "interface{}", "any":
 		return 1
 	default:
 		return 1
@@ -758,7 +762,7 @@ func LoadTableInfo(db *sql.DB, schemas *map[string]bool, dbTables []TableSchemaA
 			if au != nil {
 				fmt.Print(au.Yellow(msg))
 			} else {
-				fmt.Printf(msg)
+				fmt.Print(msg)
 			}
 
 			continue
@@ -770,7 +774,7 @@ func LoadTableInfo(db *sql.DB, schemas *map[string]bool, dbTables []TableSchemaA
 			if au != nil {
 				fmt.Print(au.Red(msg))
 			} else {
-				fmt.Printf(msg)
+				fmt.Print(msg)
 			}
 
 			continue
@@ -804,7 +808,7 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	structName := Replace(conf.ModelNamingTemplate, tableSchemaAndName.TableName)
 	structName = CheckForDupeTable(tables, structName)
 
-	fields, imports, err := conf.GenerateFieldsTypes(dbMeta)
+	fields, importsMap, err := conf.GenerateFieldsTypes(dbMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -845,7 +849,7 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	for _, f := range fields {
 
 		if f.PrimaryKeyFieldParser == "unsupported" {
-			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s",
+			return nil, fmt.Errorf("unable to generate code for table: %s, primary key column: [%d] %s has unsupported type: %s / %s (path parser uses the mapped Go type, or the same SQL type as if no go_type column comment was set)",
 				dbMeta.TableName(), f.ColumnMeta.Index(), f.ColumnMeta.Name(), f.ColumnMeta.DatabaseTypeName(), f.GoFieldType)
 		}
 		code = append(code, f.Code)
@@ -860,7 +864,8 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 		CodeFields:         fields,
 		DBMeta:             dbMeta,
 		Instance:           instance,
-		Imports:            imports,
+		Imports:            importsMap.GetImports(),
+		PkFieldImports:     importsMap.GetPKImports(),
 	}
 
 	return modelInfo, nil
@@ -938,39 +943,4 @@ func checkDupeProtoBufFieldName(fields []*FieldInfo, fieldName string) string {
 func generateAlternativeName(name string) string {
 	name = name + "alt1"
 	return name
-}
-
-// ExtractImport finds the import package from goType, add it to import maps, and replace it with valid field type format.
-func ExtractImport(importByPackageName map[ImportPackageName]*ImportItem, importByShortName map[string]*ImportItem, goType string) string {
-	parts := strings.Split(goType, ":")
-	if len(parts) != 2 {
-		return goType
-	}
-	packageName := ImportPackageName(parts[0])
-	typeName := parts[1]
-	var shortName string
-	importPackage, ok := importByPackageName[packageName]
-	if ok {
-		shortName = importPackage.ShortName
-	} else {
-		packageParts := strings.Split(string(packageName), "/")
-		shortName = packageParts[len(packageParts)-1]
-		shortName = string(regexNotAlphanum.ReplaceAll([]byte(shortName), []byte("")))
-		suffix := 0
-		initialShortName := shortName
-		for {
-			if _, ok := importByShortName[shortName]; !ok {
-				break
-			}
-			suffix++
-			shortName = initialShortName + strconv.Itoa(suffix)
-		}
-	}
-	importItem := &ImportItem{
-		Package:   packageName,
-		ShortName: shortName,
-	}
-	importByPackageName[packageName] = importItem
-	importByShortName[shortName] = importItem
-	return shortName + "." + typeName
 }

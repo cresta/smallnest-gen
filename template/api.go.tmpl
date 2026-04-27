@@ -5,7 +5,9 @@ import (
 
 	"{{.modelFQPN}}"
     "{{.daoFQPN}}"
-
+{{range .TableInfo.PkFieldImports}}
+	{{.ShortName}} "{{.Package}}"
+{{end}}
 	"github.com/gin-gonic/gin"
 	{{if .UseGuregu}} "github.com/guregu/null" {{end}}
 	"github.com/julienschmidt/httprouter"
