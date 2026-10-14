@@ -1,0 +1,153 @@
+diff --git a/README.md b/README.md
+index 1ba2c30..9c5fa1a 100644
+--- a/README.md
++++ b/README.md
+@@ -11,6 +11,10 @@ connect to the db connection string analyze the database and generate the code b
+ By reading details from the database about the column structure, gen generates a go compatible struct type
+ with the required column names, data types, and annotations.
+ 
++### Deprecated SQL columns (Cresta)
++
++Columns whose SQL comment begins with `DEPRECATED` (for example `COMMENT ON COLUMN ... IS 'DEPRECATED: ...'`) are omitted from generated model structs, `TableInfo` metadata, and DAO field lists. The column remains in the database until a later schema migration drops it.
++
+ It supports [gorm](https://github.com/jinzhu/gorm) tags and implements some usable methods. Generated data types include support for nullable columns [sql.NullX types](https://golang.org/pkg/database/sql/#NullBool) or [guregu null.X types](https://github.com/guregu/null)
+ and the expected basic built in go types.
+ 
+diff --git a/dbmeta/meta.go b/dbmeta/meta.go
+index a43b570..573f453 100644
+--- a/dbmeta/meta.go
++++ b/dbmeta/meta.go
+@@ -116,6 +116,12 @@ func (ci *columnMeta) Comment() string {
+ 	return ci.comment
+ }
+ 
++// isDeprecatedColumnComment reports whether a SQL column comment marks the column deprecated.
++// Cresta schema.sql uses COMMENT ON COLUMN ... IS 'DEPRECATED: ...' to exclude columns from generated models.
++func isDeprecatedColumnComment(comment string) bool {
++	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(comment)), "DEPRECATED")
++}
++
+ // ColumnLength column length for text or varhar
+ func (ci *columnMeta) ColumnLength() int64 {
+ 	return ci.columnLen
+@@ -352,6 +358,16 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *Imports
+ 	field := ""
+ 	importsMap := NewImportsMap()
+ 	for i, col := range dbMeta.Columns() {
++		if isDeprecatedColumnComment(col.Comment()) {
++			if col.IsPrimaryKey() {
++				return nil, nil, fmt.Errorf("table: %s cannot deprecate primary key column %q", dbMeta.TableName(), col.Name())
++			}
++			if c.Verbose {
++				fmt.Printf("table: %s skipping deprecated column: %s\n", dbMeta.TableName(), col.Name())
++			}
++			continue
++		}
++
+ 		fieldName := col.Name()
+ 
+ 		fi := &FieldInfo{
+@@ -824,8 +840,8 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
+ 	generator := dynamicstruct.NewStruct()
+ 
+ 	noOfPrimaryKeys := 0
+-	for i, c := range fields {
+-		meta := dbMeta.Columns()[i]
++	for _, c := range fields {
++		meta := c.ColumnMeta
+ 		jsonName := formatFieldName(conf.JSONNameFormat, meta.Name())
+ 		tag := fmt.Sprintf(`json:"%s"`, jsonName)
+ 		fakeData := c.FakeData
+diff --git a/dbmeta/meta_deprecated_test.go b/dbmeta/meta_deprecated_test.go
+new file mode 100644
+index 0000000..cdaa803
+--- /dev/null
++++ b/dbmeta/meta_deprecated_test.go
+@@ -0,0 +1,87 @@
++package dbmeta
++
++import (
++	"strings"
++	"testing"
++)
++
++func TestIsDeprecatedColumnComment(t *testing.T) {
++	tests := []struct {
++		comment  string
++		expected bool
++	}{
++		{comment: "", expected: false},
++		{comment: "go_type:\"github.com/foo:Bar\"", expected: false},
++		{comment: "DEPRECATED: do not read or write", expected: true},
++		{comment: "deprecated: legacy column", expected: true},
++		{comment: "  DEPRECATED: spaced prefix", expected: true},
++	}
++	for _, testCase := range tests {
++		// When
++		got := isDeprecatedColumnComment(testCase.comment)
++
++		// Then
++		if got != testCase.expected {
++			t.Fatalf("isDeprecatedColumnComment(%q) = %v, want %v", testCase.comment, got, testCase.expected)
++		}
++	}
++}
++
++func TestGenerateFieldsTypesSkipsDeprecatedColumns(t *testing.T) {
++	// Given
++	dbMeta := &dbTableMeta{
++		tableSchemaAndName: TableSchemaAndName{TableSchema: "config", TableName: "config_versions"},
++		columns: []*columnMeta{
++			{
++				index: 0, name: "version_id", databaseTypeName: "text",
++				colDDL: "TEXT", columnType: "TEXT", nullable: false, isPrimaryKey: true,
++			},
++			{
++				index: 1, name: "saved_response", databaseTypeName: "jsonb",
++				colDDL: "JSONB", columnType: "JSONB", nullable: true,
++				comment: "DEPRECATED: do not read or write",
++			},
++		},
++	}
++	conf := &Config{FieldNamingTemplate: "{{FmtFieldName .}}", UseGureguTypes: false}
++
++	// When
++	fields, _, err := conf.GenerateFieldsTypes(dbMeta)
++
++	// Then
++	if err != nil {
++		t.Fatalf("GenerateFieldsTypes: %v", err)
++	}
++	if len(fields) != 1 {
++		t.Fatalf("expected 1 field, got %d", len(fields))
++	}
++	if fields[0].GoFieldName != "VersionID" {
++		t.Fatalf("expected VersionID field, got %q", fields[0].GoFieldName)
++	}
++	if strings.Contains(fields[0].Code, "saved_response") {
++		t.Fatalf("deprecated column should not appear in generated field code: %s", fields[0].Code)
++	}
++}
++
++func TestGenerateFieldsTypesRejectsDeprecatedPrimaryKey(t *testing.T) {
++	// Given
++	dbMeta := &dbTableMeta{
++		tableSchemaAndName: TableSchemaAndName{TableName: "bad_table"},
++		columns: []*columnMeta{
++			{
++				index: 0, name: "id", databaseTypeName: "text",
++				colDDL: "TEXT", columnType: "TEXT", nullable: false, isPrimaryKey: true,
++				comment: "DEPRECATED: cannot drop yet",
++			},
++		},
++	}
++	conf := &Config{FieldNamingTemplate: "{{FmtFieldName .}}"}
++
++	// When
++	_, _, err := conf.GenerateFieldsTypes(dbMeta)
++
++	// Then
++	if err == nil {
++		t.Fatal("expected error deprecating primary key column")
++	}
++}
