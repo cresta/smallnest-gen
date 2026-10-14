@@ -116,10 +116,14 @@ func (ci *columnMeta) Comment() string {
 	return ci.comment
 }
 
+// deprecatedColumnCommentPrefix marks a column as deprecated when a SQL column comment starts with it.
+const deprecatedColumnCommentPrefix = "DEPRECATED:"
+
 // isDeprecatedColumnComment reports whether a SQL column comment marks the column deprecated.
 // Cresta schema.sql uses COMMENT ON COLUMN ... IS 'DEPRECATED: ...' to exclude columns from generated models.
+// The match is case-sensitive and requires the colon, so prose such as "Deprecated at time" does not match.
 func isDeprecatedColumnComment(comment string) bool {
-	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(comment)), "DEPRECATED")
+	return strings.HasPrefix(strings.TrimSpace(comment), deprecatedColumnCommentPrefix)
 }
 
 // ColumnLength column length for text or varhar
@@ -361,6 +365,10 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *Imports
 		if isDeprecatedColumnComment(col.Comment()) {
 			if col.IsPrimaryKey() {
 				return nil, nil, fmt.Errorf("table: %s cannot deprecate primary key column %q", dbMeta.TableName(), col.Name())
+			}
+			// Generated models omit the column, so inserts would fail unless the database can fill it.
+			if !col.Nullable() && col.DefaultValue() == "" && !col.IsAutoIncrement() {
+				return nil, nil, fmt.Errorf("table: %s cannot deprecate NOT NULL column %q without a default, add a DEFAULT or DROP NOT NULL first", dbMeta.TableName(), col.Name())
 			}
 			if c.Verbose {
 				fmt.Printf("table: %s skipping deprecated column: %s\n", dbMeta.TableName(), col.Name())

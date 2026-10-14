@@ -26,8 +26,12 @@ func TestIsDeprecatedColumnComment(t *testing.T) {
 		{comment: "", expected: false},
 		{comment: "go_type:\"github.com/foo:Bar\"", expected: false},
 		{comment: "DEPRECATED: do not read or write", expected: true},
-		{comment: "deprecated: legacy column", expected: true},
 		{comment: "  DEPRECATED: spaced prefix", expected: true},
+		{comment: "deprecated: legacy column", expected: false},
+		{comment: "Deprecated at timestamp", expected: false},
+		{comment: "DEPRECATED flag for the row", expected: false},
+		{comment: "DEPRECATED", expected: false},
+		{comment: "see DEPRECATED: elsewhere", expected: false},
 	}
 	for _, testCase := range tests {
 		// When
@@ -98,5 +102,58 @@ func TestGenerateFieldsTypesRejectsDeprecatedPrimaryKey(t *testing.T) {
 	// Then
 	if err == nil {
 		t.Fatal("expected error deprecating primary key column")
+	}
+}
+
+func TestGenerateFieldsTypesDeprecatedNotNullColumn(t *testing.T) {
+	loadTestMappings(t)
+
+	tests := []struct {
+		name            string
+		defaultVal      string
+		isAutoIncrement bool
+		expectErr       bool
+	}{
+		{name: "no default", expectErr: true},
+		{name: "with default", defaultVal: "{}"},
+		{name: "identity", isAutoIncrement: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			// Given
+			dbMeta := &dbTableMeta{
+				tableSchemaAndName: TableSchemaAndName{TableName: "config_versions"},
+				columns: []*columnMeta{
+					{
+						index: 0, name: "version_id", databaseTypeName: "text",
+						colDDL: "TEXT", columnType: "TEXT", nullable: false, isPrimaryKey: true,
+					},
+					{
+						index: 1, name: "saved_response", databaseTypeName: "jsonb",
+						colDDL: "JSONB", columnType: "JSONB", nullable: false,
+						defaultVal: testCase.defaultVal, isAutoIncrement: testCase.isAutoIncrement,
+						comment: "DEPRECATED: do not read or write",
+					},
+				},
+			}
+			conf := &Config{FieldNamingTemplate: "{{FmtFieldName .}}"}
+
+			// When
+			fields, _, err := conf.GenerateFieldsTypes(dbMeta)
+
+			// Then
+			if testCase.expectErr {
+				if err == nil {
+					t.Fatal("expected error deprecating NOT NULL column without a default")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GenerateFieldsTypes: %v", err)
+			}
+			if len(fields) != 1 {
+				t.Fatalf("expected 1 field, got %d", len(fields))
+			}
+		})
 	}
 }
