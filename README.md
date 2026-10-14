@@ -11,6 +11,14 @@ connect to the db connection string analyze the database and generate the code b
 By reading details from the database about the column structure, gen generates a go compatible struct type
 with the required column names, data types, and annotations.
 
+### Deprecated SQL columns (Cresta)
+
+Columns whose SQL comment begins with `DEPRECATED:` (uppercase, colon required, for example `COMMENT ON COLUMN ... IS 'DEPRECATED: ...'`) are omitted from generated model structs, `TableInfo` metadata, and the GORM DAO templates. The column remains in the database until a later schema migration drops it.
+
+Generation fails if a deprecated column is a primary key, or is `NOT NULL` without a default, because inserts from the generated model would leave it empty. Add a `DEFAULT` or `DROP NOT NULL` in the same or an earlier migration. A non-primary-key `serial` column counts as having no default, because its `nextval(...)` default is not kept.
+
+Limitation: the sqlx DAO templates still build their SQL (`INSERT`, `UPDATE`, `SELECT *`) from every database column, including deprecated ones, so they do not support deprecated columns. Hand-written SQL that names the column also keeps working until the column is dropped, so remove those references before the drop migration.
+
 It supports [gorm](https://github.com/jinzhu/gorm) tags and implements some usable methods. Generated data types include support for nullable columns [sql.NullX types](https://golang.org/pkg/database/sql/#NullBool) or [guregu null.X types](https://github.com/guregu/null)
 and the expected basic built in go types.
 
