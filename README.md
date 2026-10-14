@@ -11,6 +11,10 @@ connect to the db connection string analyze the database and generate the code b
 By reading details from the database about the column structure, gen generates a go compatible struct type
 with the required column names, data types, and annotations.
 
+### Deprecated SQL columns (Cresta)
+
+Columns whose SQL comment begins with `DEPRECATED` (for example `COMMENT ON COLUMN ... IS 'DEPRECATED: ...'`) are omitted from generated model structs, `TableInfo` metadata, and DAO field lists. The column remains in the database until a later schema migration drops it.
+
 It supports [gorm](https://github.com/jinzhu/gorm) tags and implements some usable methods. Generated data types include support for nullable columns [sql.NullX types](https://golang.org/pkg/database/sql/#NullBool) or [guregu null.X types](https://github.com/guregu/null)
 and the expected basic built in go types.
 

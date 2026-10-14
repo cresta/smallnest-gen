@@ -116,6 +116,12 @@ func (ci *columnMeta) Comment() string {
 	return ci.comment
 }
 
+// isDeprecatedColumnComment reports whether a SQL column comment marks the column deprecated.
+// Cresta schema.sql uses COMMENT ON COLUMN ... IS 'DEPRECATED: ...' to exclude columns from generated models.
+func isDeprecatedColumnComment(comment string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(comment)), "DEPRECATED")
+}
+
 // ColumnLength column length for text or varhar
 func (ci *columnMeta) ColumnLength() int64 {
 	return ci.columnLen
@@ -352,6 +358,16 @@ func (c *Config) GenerateFieldsTypes(dbMeta DbTableMeta) ([]*FieldInfo, *Imports
 	field := ""
 	importsMap := NewImportsMap()
 	for i, col := range dbMeta.Columns() {
+		if isDeprecatedColumnComment(col.Comment()) {
+			if col.IsPrimaryKey() {
+				return nil, nil, fmt.Errorf("table: %s cannot deprecate primary key column %q", dbMeta.TableName(), col.Name())
+			}
+			if c.Verbose {
+				fmt.Printf("table: %s skipping deprecated column: %s\n", dbMeta.TableName(), col.Name())
+			}
+			continue
+		}
+
 		fieldName := col.Name()
 
 		fi := &FieldInfo{
@@ -824,8 +840,8 @@ func GenerateModelInfo(tables map[string]*ModelInfo, dbMeta DbTableMeta,
 	generator := dynamicstruct.NewStruct()
 
 	noOfPrimaryKeys := 0
-	for i, c := range fields {
-		meta := dbMeta.Columns()[i]
+	for _, c := range fields {
+		meta := c.ColumnMeta
 		jsonName := formatFieldName(conf.JSONNameFormat, meta.Name())
 		tag := fmt.Sprintf(`json:"%s"`, jsonName)
 		fakeData := c.FakeData
